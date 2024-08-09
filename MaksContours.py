@@ -1,17 +1,22 @@
-import numpy as np
+from PySide6.QtCore import QThreadPool
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QApplication, QGridLayout, QTableWidget, QSlider, QTableWidgetItem
-
+from PySide6.QtWidgets import QApplication, QGridLayout, QTableWidget, QSlider
+from ColorButton import ColorButton
 from SelectFiles import *
 from SelectFolder import *
+from Masks import *
 import cv2
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+        self.setMinimumWidth(1200)
         self.alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         self.ids_used = set()
+        self.colors_used = set()
+
+        self.workers = QThreadPool()
 
         self.folder_selector = SelectFolder()
         self.file_selector = SelectFiles()
@@ -37,13 +42,14 @@ class MainWindow(QWidget):
         self.layout = QGridLayout()
 
         self.preview = QLabel()
-        self.preview.setMinimumHeight(600)
-        self.preview.setMinimumWidth(600)
+        self.preview.setMinimumHeight(500)
+        self.preview.setMinimumWidth(500)
         self.preview.setAlignment(Qt.AlignCenter)
 
         self.table = QTableWidget()
         self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "Min (HU)", "Max (HU)", "Mean (HU)", "Std HU()", "Median (HU)", "Volume (voxels)", ""])
+        self.table.setHorizontalHeaderLabels(
+            ["ID", "Name", "Color", "Min (HU)", "Max (HU)", "Mean (HU)", "Std HU()", "Median (HU)", "Volume (voxels)"])
 
         self.exp_pics_button = QPushButton("Save pictures")
         self.exp_contours_button = QPushButton("Save contours")
@@ -73,6 +79,7 @@ class MainWindow(QWidget):
 
     def read_data(self):
         self.frames = [Frame(x) for x in self.selected_files]
+        self.frames.sort(key=lambda x: x.z)
         self.contour_frame = Frame(self.selected_contours, True)
 
     @Slot()
@@ -82,7 +89,8 @@ class MainWindow(QWidget):
         img = (img / np.amax(img) * 255).astype(np.uint8)
         self.image = np.stack((img, img, img, np.ones_like(img) * 255), 2)
         self.update_contours()
-        img = np.array(self.image[150:-150, 150:-150, :])
+        # img = np.array(self.image[150:-150, 150:-150, :])
+        img = np.array(self.image)
 
         pixmap = QPixmap.fromImage(QImage(img.data,
                                           img.shape[1], img.shape[0], img.shape[1] * 4,
@@ -133,32 +141,46 @@ class MainWindow(QWidget):
         self.file_selector.show()
 
     def generate_rows(self):
-        for row, name in enumerate(self.contour_frame.contours_names):
+        names = self.contour_frame.contours_names
+        for row, name in enumerate(names):
             self.table.insertRow(row)
 
             id_item = QTableWidgetItem()
-            id_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            id_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             id_item.setText(self.get_id())
             id_item.setCheckState(Qt.Unchecked)
             self.table.setItem(row, 0, id_item)
+            self.table.cellChanged.connect(self.handle_item_checked)
 
             name_item = QTableWidgetItem(name)
-            name_item.setFlags(Qt.ItemIsEnabled)
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, 1, name_item)
+
+            color_item = ColorButton()
+            color_item.changed.connect(self.handle_item_clicked)
+            self.table.setCellWidget(row, 2, color_item)
 
         for frame in self.frames:
             for i, contour_sequence in enumerate(self.contour_frame.contours_sequences):
+                mask = np.zeros(frame.hu_img.shape, dtype=int)
                 for contour_instance in contour_sequence:
                     if frame.sup_uid == contour_instance.ContourImageSequence[0].ReferencedSOPInstanceUID:
                         contour_raw = contour_instance.ContourData
                         contour = np.asarray(contour_raw).reshape((3, -1), order="F")[:-1].ravel(order="F").reshape(
                             (-1, 2))
+                        contour -= np.asarray(self.frames[self.value].file.ImagePositionPatient[:-1])
                         contour *= np.array([self.frames[self.value].file.ImageOrientationPatient[0],
                                              self.frames[self.value].file.ImageOrientationPatient[4]])
-                        contour -= np.asarray(self.frames[self.value].file.ImagePositionPatient[:-1])
                         contour /= np.asarray(self.frames[self.value].file.PixelSpacing)
                         contour = np.concatenate((contour, [contour[0]]))
-                        frame.contours[self.contour_frame.contours_names[i]].append(np.rint(contour.reshape(-1, 1, 2)).astype(int))
+                        update_mask(mask, contour)
+                        frame.contours[names[i]].append(contour.reshape(-1, 1, 2))
+                frame.contours_masks[names[i]] = np.array(mask % 2, dtype=bool)
+
+        for row, name in enumerate(names):
+            properties = ContourProperty(name, self.frames)
+            properties.add_to_table(self.table, row)
+            self.contour_frame.contours_properties[name] = properties
 
     def get_id(self):
         i = 0
@@ -170,16 +192,20 @@ class MainWindow(QWidget):
         return code
 
     def get_code(self, value):
-        code = ""
+        temp_code = [0]
+        for i in range(value):
+            temp_code[0] += 1
 
-        while value > len(self.alphabet):
-            digit = value % len(self.alphabet)
-            code += self.alphabet[digit]
-            value //= len(self.alphabet)
+            a = len(temp_code)
+            for j in range(a):
+                if temp_code[j] == len(self.alphabet):
+                    temp_code[j] = 0
+                    if j == a - 1:
+                        temp_code.append(0)
+                    else:
+                        temp_code[j + 1] += 1
 
-        digit = value % len(self.alphabet)
-        code += self.alphabet[digit]
-
+        code = "".join([self.alphabet[i] for i in temp_code])
         return code[::-1]
 
     @Slot()
@@ -189,10 +215,32 @@ class MainWindow(QWidget):
             if self.table.item(cell, 0).checkState() == Qt.Checked:
                 indices.append(cell)
 
+        alpha = 0.7
+
         for i in indices:
             if self.contour_frame.contours_names[i] in self.frames[self.value].contours:
-                cv2.drawContours(self.image, self.frames[self.value].contours[self.contour_frame.contours_names[i]],
-                                 -1, (0, 0, 255, 255), 1, cv2.LINE_AA)
+                color = self.table.cellWidget(i, 2).color.getRgb()
+                names = self.contour_frame.contours_names[i]
+
+                contours_to_draw = [np.rint(x).astype(int) for x in self.frames[self.value].contours[names]]
+                bit_mask = self.frames[self.value].contours_masks[names]
+                color_mask = np.stack([bit_mask * 255, bit_mask * color[0], bit_mask * color[1], bit_mask * color[2]], axis=-1)
+                color_mask = (255 * color_mask).astype(np.uint8)
+
+                new_image = cv2.addWeighted(self.image, alpha, color_mask, 1 - alpha, 0)
+                self.image = np.where(np.stack([bit_mask, bit_mask, bit_mask, bit_mask], axis=-1) == 0,
+                                      self.image, new_image)
+
+                cv2.drawContours(self.image, contours_to_draw, -1, color, 1, cv2.LINE_AA)
+
+    @Slot()
+    def handle_item_checked(self, _, column):
+        if column == 0 or column == 2:
+            self.change_img(self.value)
+
+    @Slot()
+    def handle_item_clicked(self):
+        self.change_img(self.value)
 
 
 app = QApplication()

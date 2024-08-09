@@ -25,7 +25,10 @@ class SelectFolder(QWidget):
         self.tree.setMinimumHeight(600)
         self.tree.setColumnWidth(0, 300)
         self.tree.setRootIndex(self.model.index(QDir.rootPath()))
-        self.tree.setCurrentIndex(self.model.index(QDir.homePath()))
+        # self.tree.setCurrentIndex(self.model.index(QDir.homePath()))
+        self.tree.setCurrentIndex(self.model.index("C:\\Users\\Maks\\Downloads\\CT_nowa\\CT_nowa\\Pacjent"))
+        # self.tree.setCurrentIndex(self.model.index("C:\\Users\\Maks\\OneDrive\\MaksContours\\CT_07.10.2020"))
+        # self.tree.setCurrentIndex(self.model.index("/Users/maks/Library/CloudStorage/OneDrive-Osobisty/MaksContours/CT_07.10.2020"))
 
         self.buttonSelect = QPushButton('Select CT')
         self.buttonSelect.clicked.connect(self.select_directory)

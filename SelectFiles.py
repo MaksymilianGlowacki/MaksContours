@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QListWi
 from pydicom import read_file
 from collections import defaultdict
 
+
 class Frame:
     def __init__(self, x, rt_struct=False):
 
@@ -19,8 +20,11 @@ class Frame:
         self.num_contours = None
         self.contours_names = None
         self.contours_sequences = None
+        self.contours_properties = None
 
+        self.contours_masks = None
         self.contours = None
+        self.z = None
 
         if not rt_struct:
             self.raw_img = self.file.pixel_array
@@ -28,10 +32,13 @@ class Frame:
             self.rescale_intercept = self.file.RescaleIntercept
             self.hu_img = self.raw_img * self.rescale_slope + self.rescale_intercept
             self.contours = defaultdict(list)
+            self.contours_masks = {}
+            self.z = self.file.ImagePositionPatient[-1]
         else:
             self.num_contours = len(self.file.StructureSetROISequence)
             self.contours_names = [self.file.StructureSetROISequence[i].ROIName for i in range(self.num_contours)]
             self.contours_sequences = [self.file.ROIContourSequence[i].ContourSequence for i in range(self.num_contours)]
+            self.contours_properties = {}
 
 
 class SelectFiles(QWidget):
@@ -72,7 +79,7 @@ class SelectFiles(QWidget):
         for file in self.files:
             item = QListWidgetItem(file.fileName())
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            if file.fileName().lower()[-4:] == ".dcm":
+            if file.fileName().lower()[-4:] == ".dcm" and file.fileName().lower()[:2] == "ct":
                 item.setCheckState(Qt.Checked)
             else:
                 item.setCheckState(Qt.Unchecked)
@@ -119,7 +126,11 @@ class SelectContour(SelectFiles):
     def populate_list(self):
         super().populate_list()
         for i in range(self.scan_list.count()):
-            self.scan_list.item(i).setCheckState(Qt.Unchecked)
+
+            if self.scan_list.item(i).text().lower()[-4:] == ".dcm" and self.scan_list.item(i).text().lower()[:2] == "rs":
+                self.scan_list.item(i).setCheckState(Qt.Checked)
+            else:
+                self.scan_list.item(i).setCheckState(Qt.Unchecked)
 
     @Slot()
     def accept_files(self):
